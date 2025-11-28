@@ -152,12 +152,12 @@ export default function Dashboard() {
                                 <button
                                     onClick={startExam}
                                     disabled={!selectedSubject}
-                                    className={`w-full btn ${selectedSubject
-                                        ? "btn-primary"
+                                    className={`w-full py-4 rounded-xl font-bold text-lg transition-all shadow-lg flex items-center justify-center gap-3 ${selectedSubject
+                                        ? "bg-gradient-to-r from-primary to-blue-600 text-white hover:scale-[1.02] active:scale-[0.98] hover:shadow-primary/25"
                                         : "bg-slate-800 text-slate-500 cursor-not-allowed"
                                         }`}
                                 >
-                                    <Play size={18} />
+                                    <Play size={20} fill="currentColor" />
                                     Start Exam
                                 </button>
                             </div>
