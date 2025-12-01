@@ -21,7 +21,6 @@ interface VectorStats {
 
 export default function AdminDashboard() {
     const [files, setFiles] = useState<File[]>([]);
-    const [subject, setSubject] = useState("Physics");
     const [uploading, setUploading] = useState(false);
     const [status, setStatus] = useState<{ type: "success" | "error" | null; message: string }>({
         type: null,
@@ -90,7 +89,7 @@ export default function AdminDashboard() {
             for (const file of files) {
                 const formData = new FormData();
                 formData.append("file", file);
-                formData.append("subject", subject);
+                // Subject defaults to "mixed" in backend
                 const res = await fetch("http://localhost:8000/upload-document", {
                     method: "POST",
                     body: formData,
@@ -159,20 +158,7 @@ export default function AdminDashboard() {
                                 Upload Knowledge Source
                             </h2>
                             <div className="space-y-6">
-                                {/* Subject Selection */}
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-400 mb-2">Subject</label>
-                                    <select
-                                        value={subject}
-                                        onChange={(e) => setSubject(e.target.value)}
-                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-primary transition-colors"
-                                    >
-                                        <option value="Physics">Physics</option>
-                                        <option value="Chemistry">Chemistry</option>
-                                        <option value="Maths">Maths</option>
-                                        <option value="Mixed">Mixed (Physics, Maths, Chemistry)</option>
-                                    </select>
-                                </div>
+                                {/* File Drop Zone */}
 
                                 {/* File Drop Zone */}
                                 <div
