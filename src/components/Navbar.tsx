@@ -2,17 +2,23 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { BookOpen, LogOut, User } from "lucide-react";
+import { BookOpen, LogOut, User, BarChart3, CreditCard } from "lucide-react";
 import { useEffect, useState } from "react";
 
 export default function Navbar() {
     const router = useRouter();
-    const [user, setUser] = useState<string | null>(null);
+    const [username, setUsername] = useState<string | null>(null);
 
     useEffect(() => {
         const storedUser = localStorage.getItem("user");
         if (storedUser) {
-            setUser(storedUser);
+            try {
+                const parsedUser = JSON.parse(storedUser);
+                setUsername(parsedUser.username || parsedUser.full_name || "Student");
+            } catch (e) {
+                // If it's just a string or parsing fails, use it as is or fallback
+                setUsername(storedUser);
+            }
         }
     }, []);
 
@@ -33,10 +39,27 @@ export default function Navbar() {
                     </span>
                 </Link>
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-6">
+                    {/* Navigation Links */}
+                    <Link 
+                        href="/performance" 
+                        className="flex items-center gap-2 px-3 py-1.5 text-sm text-slate-400 hover:text-white transition-colors"
+                    >
+                        <BarChart3 size={16} />
+                        <span>Performance</span>
+                    </Link>
+                    <Link 
+                        href="/subscription" 
+                        className="flex items-center gap-2 px-3 py-1.5 text-sm text-slate-400 hover:text-white transition-colors"
+                    >
+                        <CreditCard size={16} />
+                        <span>Subscription</span>
+                    </Link>
+
+                    {/* User Info */}
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700">
                         <User size={14} className="text-primary" />
-                        <span className="text-sm font-medium text-slate-300">{user || "Student"}</span>
+                        <span className="text-sm font-medium text-slate-300 capitalize">{username || "Student"}</span>
                     </div>
                     <button
                         onClick={handleLogout}

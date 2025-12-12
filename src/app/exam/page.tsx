@@ -6,11 +6,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, ArrowRight, CheckCircle, AlertCircle, Flag, RefreshCw, FileText, FileJson } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Timer from "@/components/Timer";
+import { QuestionPalette } from "@/components/QuestionPalette";
 import { fetchQuestions, Question } from "@/lib/api";
 
 function ExamContent() {
     const searchParams = useSearchParams();
     const router = useRouter();
+    const examType = searchParams.get("examType") || "IIT_JEE";
     const subject = searchParams.get("subject") || "General";
     const difficulty = searchParams.get("difficulty") || "Medium";
     const count = parseInt(searchParams.get("count") || "10");
@@ -21,11 +23,54 @@ function ExamContent() {
     const [answers, setAnswers] = useState<Record<number, number>>({});
     const [submitted, setSubmitted] = useState(false);
     const [score, setScore] = useState(0);
+    const [questionStatuses, setQuestionStatuses] = useState<Record<number, { answered: boolean; markedForReview: boolean }>>({});
+
+    // Exam configurations
+    const examConfigs: Record<string, { subjects: string[], questionsPerSubject: number, duration: number }> = {
+        "IIT_JEE": {
+            subjects: ["Mathematics", "Physics", "Chemistry"],
+            questionsPerSubject: 30,
+            duration: 180
+        },
+        "NEET": {
+            subjects: ["Physics", "Chemistry", "Biology"],
+            questionsPerSubject: 45,
+            duration: 180
+        },
+        "EAMCET": {
+            subjects: ["Physics", "Chemistry", "Mathematics", "Biology"],
+            questionsPerSubject: 40,
+            duration: 180
+        }
+    };
 
     useEffect(() => {
         const loadQuestions = async () => {
             try {
-                const data = await fetchQuestions(subject, difficulty, count);
+                let data: Question[] = [];
+                
+                // Check if this is a configured exam type
+                const config = examConfigs[examType];
+                
+                if (config) {
+                    // Fetch questions for each subject in the exam
+                    // Fetch questions for each subject in the exam in parallel
+                    const promises = config.subjects.map(async (subj) => {
+                        const subjectQuestions = await fetchQuestions(subj, difficulty, config.questionsPerSubject, examType);
+                        // Tag each question with its subject
+                        return subjectQuestions.map(q => ({
+                            ...q,
+                            subject: subj
+                        }));
+                    });
+
+                    const results = await Promise.all(promises);
+                    data = results.flat();
+                } else {
+                    // Fallback for custom exams (shouldn't happen with current setup)
+                    data = await fetchQuestions(subject, difficulty, count, examType);
+                }
+                
                 setQuestions(data);
             } catch (error) {
                 console.error("Failed to load questions", error);
@@ -34,11 +79,34 @@ function ExamContent() {
             }
         };
         loadQuestions();
-    }, [subject, difficulty, count]);
+    }, [examType, subject, difficulty, count]);
 
     const handleAnswer = (optionIndex: number) => {
         if (submitted) return;
         setAnswers((prev) => ({ ...prev, [currentQuestionIndex]: optionIndex }));
+        
+        // Update question status to answered
+        setQuestionStatuses((prev) => ({
+            ...prev,
+            [currentQuestionIndex]: {
+                answered: true,
+                markedForReview: prev[currentQuestionIndex]?.markedForReview || false,
+            },
+        }));
+    };
+
+    const handleMarkForReview = () => {
+        setQuestionStatuses((prev) => ({
+            ...prev,
+            [currentQuestionIndex]: {
+                answered: prev[currentQuestionIndex]?.answered || false,
+                markedForReview: !(prev[currentQuestionIndex]?.markedForReview || false),
+            },
+        }));
+    };
+
+    const handleQuestionSelect = (index: number) => {
+        setCurrentQuestionIndex(index);
     };
 
     const [user, setUser] = useState<string | null>(null);
@@ -46,7 +114,20 @@ function ExamContent() {
     useEffect(() => {
         const storedUser = localStorage.getItem("user");
         if (storedUser) {
-            setUser(storedUser);
+            try {
+                if (storedUser.startsWith("{")) {
+                    const userData = JSON.parse(storedUser);
+                    // 1. Try email (most likely for unique ID)
+                    // 2. Try username
+                    // 3. Fallback to just using the parsed object if it was somehow a string wrapped in quotes? No.
+                    setUser(userData.email || userData.username || storedUser);
+                } else {
+                    setUser(storedUser);
+                }
+            } catch (error) {
+                console.error("Failed to parse user data", error);
+                setUser(storedUser);
+            }
         }
     }, []);
 
@@ -63,7 +144,7 @@ function ExamContent() {
         // Save result to backend
         if (user) {
             try {
-                await fetch("http://localhost:8000/submit-exam", {
+                const response = await fetch("http://localhost:8000/submit-exam", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
@@ -76,8 +157,14 @@ function ExamContent() {
                         total_questions: questions.length,
                     }),
                 });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.detail || `Server responded with ${response.status}`);
+                }
             } catch (error) {
                 console.error("Failed to save exam result", error);
+                alert("Warning: Failed to save exam results to the server. Please try again or check your connection.");
             }
         }
     };
@@ -120,6 +207,33 @@ function ExamContent() {
         const incorrectCount = questions.length - score;
         const percentage = Math.round((score / questions.length) * 100);
 
+        // Calculate subject-wise statistics
+        const calculateSubjectStats = () => {
+            const stats: Record<string, { correct: number; total: number; percentage: number }> = {};
+
+            questions.forEach((q, index) => {
+                const questionSubject = q.subject || subject; // Fallback to overall subject
+                if (!stats[questionSubject]) {
+                    stats[questionSubject] = { correct: 0, total: 0, percentage: 0 };
+                }
+                stats[questionSubject].total++;
+                if (answers[index] === q.correctAnswer) {
+                    stats[questionSubject].correct++;
+                }
+            });
+
+            // Calculate percentages
+            Object.keys(stats).forEach((subj) => {
+                const s = stats[subj];
+                s.percentage = s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0;
+            });
+
+            return stats;
+        };
+
+        const subjectStats = calculateSubjectStats();
+        const hasMultipleSubjects = Object.keys(subjectStats).length > 1;
+
         const downloadResults = async (format: 'pdf' | 'json') => {
             const timestamp = new Date().toLocaleString();
 
@@ -151,7 +265,10 @@ function ExamContent() {
                 // Exam Info
                 doc.setFontSize(12);
                 doc.setTextColor(100, 100, 100);
-                doc.text(`Subject: ${subject}`, margin, yPos);
+                const subjectText = examConfigs[examType] 
+                    ? `All Subjects (${examConfigs[examType].subjects.join(", ")})` 
+                    : subject;
+                doc.text(`Subject: ${subjectText}`, margin, yPos);
                 yPos += 7;
                 doc.text(`Difficulty: ${difficulty}`, margin, yPos);
                 yPos += 7;
@@ -168,10 +285,10 @@ function ExamContent() {
 
                 doc.setFontSize(12);
                 doc.setTextColor(34, 197, 94);
-                doc.text(`✓ Correct: ${correctCount}`, margin + 5, yPos + 20);
+                doc.text(`[+] Correct: ${correctCount}`, margin + 5, yPos + 20);
 
                 doc.setTextColor(239, 68, 68);
-                doc.text(`✗ Incorrect: ${incorrectCount}`, margin + 60, yPos + 20);
+                doc.text(`[-] Incorrect: ${incorrectCount}`, margin + 60, yPos + 20);
 
                 yPos += 40;
 
@@ -191,18 +308,26 @@ function ExamContent() {
                     // Question Header
                     doc.setFontSize(14);
                     doc.setTextColor(0, 0, 0);
-                    doc.text(`Question ${index + 1}`, margin, yPos);
+                    const questionHeader = `Question ${index + 1}`;
+                    doc.text(questionHeader, margin, yPos);
+                    
+                    // Show subject for all configured exam types
+                    if (examConfigs[examType] && q.subject) {
+                        doc.setFontSize(9);
+                        doc.setTextColor(100, 100, 100);
+                        doc.text(`[${q.subject}]`, margin + doc.getTextWidth(questionHeader) + 3, yPos);
+                    }
 
                     doc.setFontSize(10);
                     if (isCorrect) {
                         doc.setTextColor(34, 197, 94);
-                        doc.text('✓ CORRECT', pageWidth - margin - 30, yPos);
+                        doc.text('[CORRECT]', pageWidth - margin - 30, yPos);
                     } else if (wasAnswered) {
                         doc.setTextColor(239, 68, 68);
-                        doc.text('✗ INCORRECT', pageWidth - margin - 30, yPos);
+                        doc.text('[INCORRECT]', pageWidth - margin - 30, yPos);
                     } else {
                         doc.setTextColor(234, 179, 8);
-                        doc.text('⚠ NOT ANSWERED', pageWidth - margin - 40, yPos);
+                        doc.text('[NOT ANSWERED]', pageWidth - margin - 40, yPos);
                     }
                     yPos += 8;
 
@@ -228,13 +353,13 @@ function ExamContent() {
 
                         if (isCorrectAnswer) {
                             doc.setTextColor(34, 197, 94);
-                            doc.text(`✓ ${letter}. ${opt}`, margin + 5, yPos);
+                            doc.text(`[+] ${letter}. ${opt}`, margin + 5, yPos);
                         } else if (isUserAnswer && !isCorrect) {
                             doc.setTextColor(239, 68, 68);
-                            doc.text(`✗ ${letter}. ${opt}`, margin + 5, yPos);
+                            doc.text(`[-] ${letter}. ${opt}`, margin + 5, yPos);
                         } else {
                             doc.setTextColor(100, 100, 100);
-                            doc.text(`  ${letter}. ${opt}`, margin + 5, yPos);
+                            doc.text(`    ${letter}. ${opt}`, margin + 5, yPos);
                         }
                         yPos += 6;
                     });
@@ -265,7 +390,7 @@ function ExamContent() {
                         checkNewPage(20);
                         doc.setFontSize(9);
                         doc.setTextColor(59, 130, 246);
-                        doc.text('💡 Explanation:', margin + 5, yPos);
+                        doc.text('[Explanation]', margin + 5, yPos);
                         yPos += 5;
 
                         doc.setTextColor(80, 80, 80);
@@ -284,7 +409,7 @@ function ExamContent() {
                     yPos += 10;
                 });
 
-                doc.save(`exam-results-${subject}-${Date.now()}.pdf`);
+                doc.save(`exam-results-${examConfigs[examType] ? examType : subject}-${Date.now()}.pdf`);
             } else {
                 const results = {
                     exam: {
@@ -332,7 +457,11 @@ function ExamContent() {
                             <div className="flex items-center justify-between mb-6">
                                 <div>
                                     <h1 className="text-3xl font-bold mb-2">Exam Completed!</h1>
-                                    <p className="text-slate-400">{subject} - {difficulty} Level</p>
+                                    <p className="text-slate-400">
+                                        {examType.replace('_', '/')} - 
+                                        {examConfigs[examType] ? " All Subjects" : ` ${subject}`} - 
+                                        {difficulty} Level
+                                    </p>
                                 </div>
                                 <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center">
                                     <CheckCircle className="w-10 h-10 text-green-500" />
@@ -401,6 +530,46 @@ function ExamContent() {
                                 </p>
                             </div>
                         </div>
+
+                        {/* Subject-wise Performance */}
+                        {hasMultipleSubjects && (
+                            <div className="glass-panel p-6 mb-8">
+                                <h2 className="text-2xl font-bold mb-4">Subject-wise Performance</h2>
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    {Object.entries(subjectStats).map(([subj, stats]) => (
+                                        <div key={subj} className="p-4 bg-slate-800 rounded-lg">
+                                            <div className="text-lg font-semibold mb-3">{subj}</div>
+                                            
+                                            {/* Progress Bar */}
+                                            <div className="w-full bg-slate-700 rounded-full h-3 mb-3">
+                                                <div
+                                                    className={`h-3 rounded-full transition-all ${
+                                                        stats.percentage >= 70 ? 'bg-green-500' :
+                                                        stats.percentage >= 50 ? 'bg-yellow-500' :
+                                                        'bg-red-500'
+                                                    }`}
+                                                    style={{ width: `${stats.percentage}%` }}
+                                                ></div>
+                                            </div>
+                                            
+                                            <div className="flex justify-between items-center text-sm">
+                                                <span className="text-slate-400">
+                                                    {stats.correct}/{stats.total} correct
+                                                </span>
+                                                <span className={`font-semibold text-lg ${
+                                                    stats.percentage >= 70 ? 'text-green-400' :
+                                                    stats.percentage >= 50 ? 'text-yellow-400' :
+                                                    'text-red-400'
+                                                }`}>
+                                                    {stats.percentage}%
+                                                </span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Detailed Results */}
                         <div className="space-y-4">
@@ -557,12 +726,18 @@ function ExamContent() {
                             <ArrowLeft size={20} className="text-slate-400" />
                         </button>
                         <div>
-                            <h1 className="font-semibold">{subject} Exam</h1>
+                            <h1 className="font-semibold">
+                                {examType.replace('_', '/')} 
+                                {examConfigs[examType] ? ` - ${currentQuestion?.subject || "All Subjects"}` : ` - ${subject}`} Exam
+                            </h1>
                             <div className="text-xs text-slate-400">Question {currentQuestionIndex + 1} of {questions.length}</div>
                         </div>
                     </div>
 
-                    <Timer durationInSeconds={count * 120} onTimeUp={handleTimeUp} />
+                    <Timer 
+                        durationInSeconds={(examConfigs[examType]?.duration || 180) * 60} 
+                        onTimeUp={handleTimeUp} 
+                    />
 
                     <button
                         onClick={handleSubmit}
@@ -582,86 +757,115 @@ function ExamContent() {
                 </div>
             </header>
 
-            <main className="flex-1 container py-8 max-w-4xl">
-                <AnimatePresence mode="wait">
-                    <motion.div
-                        key={currentQuestionIndex}
-                        initial={{ x: 20, opacity: 0 }}
-                        animate={{ x: 0, opacity: 1 }}
-                        exit={{ x: -20, opacity: 0 }}
-                        transition={{ duration: 0.3 }}
-                        className="glass-panel p-8"
-                    >
-                        <div className="flex justify-between items-start mb-6">
-                            <span className="px-3 py-1 rounded-full bg-primary/10 text-primary text-sm font-medium border border-primary/20">
-                                {difficulty}
-                            </span>
-                            <button className="text-slate-400 hover:text-yellow-400 transition-colors">
-                                <Flag size={18} />
-                            </button>
-                        </div>
-
-                        <h2 className="text-xl font-medium mb-8 leading-relaxed">
-                            {currentQuestion.text}
-                        </h2>
-
-                        <div className="space-y-3">
-                            {currentQuestion.options.map((option, idx) => (
-                                <button
-                                    key={idx}
-                                    onClick={() => handleAnswer(idx)}
-                                    className={`w-full p-4 rounded-xl text-left border transition-all flex items-center justify-between group ${answers[currentQuestionIndex] === idx
-                                        ? "border-primary bg-primary/10 ring-1 ring-primary"
-                                        : "border-slate-700 bg-slate-800/50 hover:bg-slate-800 hover:border-slate-600"
+            {/* Main Content - Two Panel Layout */}
+            <main className="flex-1 container py-8 max-w-7xl">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Left Panel - Question Display (2/3 width) */}
+                    <div className="lg:col-span-2">
+                        <AnimatePresence mode="wait">
+                            <motion.div
+                                key={currentQuestionIndex}
+                                initial={{ x: 20, opacity: 0 }}
+                                animate={{ x: 0, opacity: 1 }}
+                                exit={{ x: -20, opacity: 0 }}
+                                transition={{ duration: 0.3 }}
+                                className="glass-panel p-8"
+                            >
+                                <div className="flex justify-between items-start mb-6">
+                                    <span className="px-3 py-1 rounded-full bg-primary/10 text-primary text-sm font-medium border border-primary/20">
+                                        {difficulty}
+                                    </span>
+                                    <button 
+                                        onClick={handleMarkForReview}
+                                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all ${
+                                            questionStatuses[currentQuestionIndex]?.markedForReview
+                                                ? 'bg-yellow-500/20 border-yellow-500/50 text-yellow-400'
+                                                : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:text-yellow-400 hover:border-yellow-500/30'
                                         }`}
-                                >
-                                    <div className="flex items-center gap-4">
-                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center border ${answers[currentQuestionIndex] === idx
-                                            ? "bg-primary border-primary text-white"
-                                            : "border-slate-600 text-slate-400 group-hover:border-slate-500"
-                                            }`}>
-                                            {String.fromCharCode(65 + idx)}
-                                        </div>
-                                        <span className={answers[currentQuestionIndex] === idx ? "text-white" : "text-slate-300"}>
-                                            {option}
+                                    >
+                                        <Flag size={16} />
+                                        <span className="text-sm">
+                                            {questionStatuses[currentQuestionIndex]?.markedForReview ? 'Marked' : 'Mark for Review'}
                                         </span>
-                                    </div>
-                                    {answers[currentQuestionIndex] === idx && (
-                                        <CheckCircle size={20} className="text-primary" />
-                                    )}
+                                    </button>
+                                </div>
+
+                                <h2 className="text-xl font-medium mb-8 leading-relaxed">
+                                    {currentQuestion.text}
+                                </h2>
+
+                                <div className="space-y-3">
+                                    {currentQuestion.options.map((option, idx) => (
+                                        <button
+                                            key={idx}
+                                            onClick={() => handleAnswer(idx)}
+                                            className={`w-full p-4 rounded-xl text-left border transition-all flex items-center justify-between group ${answers[currentQuestionIndex] === idx
+                                                ? "border-primary bg-primary/10 ring-1 ring-primary"
+                                                : "border-slate-700 bg-slate-800/50 hover:bg-slate-800 hover:border-slate-600"
+                                                }`}
+                                        >
+                                            <div className="flex items-center gap-4">
+                                                <div className={`w-8 h-8 rounded-full flex items-center justify-center border ${answers[currentQuestionIndex] === idx
+                                                    ? "bg-primary border-primary text-white"
+                                                    : "border-slate-600 text-slate-400 group-hover:border-slate-500"
+                                                    }`}>
+                                                    {String.fromCharCode(65 + idx)}
+                                                </div>
+                                                <span className={answers[currentQuestionIndex] === idx ? "text-white" : "text-slate-300"}>
+                                                    {option}
+                                                </span>
+                                            </div>
+                                            {answers[currentQuestionIndex] === idx && (
+                                                <CheckCircle size={20} className="text-primary" />
+                                            )}
+                                        </button>
+                                    ))}
+                                </div>
+                            </motion.div>
+                        </AnimatePresence>
+
+                        {/* Navigation Buttons */}
+                        <div className="flex justify-between mt-6">
+                            <button
+                                onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
+                                disabled={currentQuestionIndex === 0}
+                                className="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <ArrowLeft size={18} />
+                                Previous
+                            </button>
+
+                            {isLastQuestion ? (
+                                <button
+                                    onClick={handleSubmit}
+                                    className="btn btn-primary"
+                                >
+                                    Submit Exam
+                                    <CheckCircle size={18} />
                                 </button>
-                            ))}
+                            ) : (
+                                <button
+                                    onClick={() => setCurrentQuestionIndex((prev) => Math.min(questions.length - 1, prev + 1))}
+                                    className="btn btn-primary"
+                                >
+                                    Next Question
+                                    <ArrowRight size={18} />
+                                </button>
+                            )}
                         </div>
-                    </motion.div>
-                </AnimatePresence>
+                    </div>
 
-                <div className="flex justify-between mt-8">
-                    <button
-                        onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
-                        disabled={currentQuestionIndex === 0}
-                        className="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        <ArrowLeft size={18} />
-                        Previous
-                    </button>
-
-                    {isLastQuestion ? (
-                        <button
-                            onClick={handleSubmit}
-                            className="btn btn-primary"
-                        >
-                            Submit Exam
-                            <CheckCircle size={18} />
-                        </button>
-                    ) : (
-                        <button
-                            onClick={() => setCurrentQuestionIndex((prev) => Math.min(questions.length - 1, prev + 1))}
-                            className="btn btn-primary"
-                        >
-                            Next Question
-                            <ArrowRight size={18} />
-                        </button>
-                    )}
+                    {/* Right Panel - Question Palette (1/3 width) */}
+                    <div className="lg:col-span-1">
+                        <div className="sticky top-24">
+                            <QuestionPalette
+                                totalQuestions={questions.length}
+                                currentQuestion={currentQuestionIndex}
+                                statuses={questionStatuses}
+                                onQuestionSelect={handleQuestionSelect}
+                            />
+                        </div>
+                    </div>
                 </div>
             </main>
         </div>

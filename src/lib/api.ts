@@ -1,18 +1,21 @@
 
+
 export interface Question {
     id: string;
     text: string;
     options: string[];
     correctAnswer: number; // index
     explanation?: string;
+    subject?: "Physics" | "Chemistry" | "Mathematics" | string;
+    difficulty?: "Easy" | "Medium" | "Hard" | string;
 }
 
-export async function fetchQuestions(subject: string, difficulty: string, count: number): Promise<Question[]> {
+export async function fetchQuestions(subject: string, difficulty: string, count: number, examType?: string): Promise<Question[]> {
     try {
         const response = await fetch('http://localhost:8000/generate-questions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ subject, difficulty, count })
+            body: JSON.stringify({ subject, difficulty, count, exam_type: examType })
         });
 
         if (!response.ok) {
