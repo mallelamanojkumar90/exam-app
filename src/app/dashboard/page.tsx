@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { motion } from "framer-motion";
 import { 
     Calculator, Atom, FlaskConical, Dna, Layers, Play, Clock, 
@@ -61,6 +62,7 @@ const difficulties = ["Easy", "Medium", "Hard"];
 
 export default function Dashboard() {
     const router = useRouter();
+    const { data: session } = useSession();
     const [selectedExamType, setSelectedExamType] = useState<string | null>(null);
     const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
     const [difficulty, setDifficulty] = useState("Medium");
@@ -68,24 +70,33 @@ export default function Dashboard() {
     const [availableSubjects, setAvailableSubjects] = useState<string[]>([]);
     const [username, setUsername] = useState<string>("Student");
 
-    // Load username from localStorage
+    // Load username from NextAuth session or localStorage
     useEffect(() => {
-        const storedUser = localStorage.getItem("user");
-        if (storedUser) {
-            try {
-                if (storedUser.startsWith("{")) {
-                    const userData = JSON.parse(storedUser);
-                    // Use full_name if available, fallback to username (email), then "Student"
-                    setUsername(userData.full_name || userData.username || "Student");
-                } else {
-                    setUsername(storedUser);
+        // First, try to get from NextAuth session (for Google OAuth users)
+        if (session?.user?.name) {
+            setUsername(session.user.name);
+        } else if (session?.user?.email) {
+            // Fallback to email if name is not available
+            setUsername(session.user.email);
+        } else {
+            // Fallback to localStorage (for traditional email/password login)
+            const storedUser = localStorage.getItem("user");
+            if (storedUser) {
+                try {
+                    if (storedUser.startsWith("{")) {
+                        const userData = JSON.parse(storedUser);
+                        // Use full_name if available, fallback to username (email), then "Student"
+                        setUsername(userData.full_name || userData.username || "Student");
+                    } else {
+                        setUsername(storedUser);
+                    }
+                } catch (e) {
+                    console.error("Error parsing user data", e);
+                    setUsername("Student");
                 }
-            } catch (e) {
-                console.error("Error parsing user data", e);
-                setUsername("Student");
             }
         }
-    }, []);
+    }, [session]);
 
     // Update available subjects when exam type changes
     useEffect(() => {
